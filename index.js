@@ -8,7 +8,6 @@ import {
   makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
-  Browsers
 } from '@whiskeysockets/baileys';
 import { Boom }       from '@hapi/boom';
 import NodeCache      from 'node-cache';
@@ -78,11 +77,13 @@ async function connectToWhatsApp() {
     sock = makeWASocket({
       auth:                state,
       logger,
-      browser:             Browsers.ubuntu('Chrome'),
+      browser:             ['VEXIS-Bot', 'Safari', '17.0'],
       printQRInTerminal:   false,
       connectTimeoutMs:    60_000,
       keepAliveIntervalMs: 25_000,
       retryRequestDelayMs: 2000,
+      generateHighQualityLinkPreview: false,
+      syncFullHistory: false,
     });
 
     // ── Connection Status Listener ───────────────────────────
