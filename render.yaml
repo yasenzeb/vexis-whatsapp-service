@@ -20,4 +20,4 @@ services:
       - key: AUTH_DIR
         value: /app/auth
     healthCheckPath: /health
-    autoDeploy: false      # مش هيعمل deploy كل push
+    autoDeploy: true       # يعيد البناء أوتوماتيك مع كل push

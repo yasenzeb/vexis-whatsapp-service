@@ -15,7 +15,8 @@ import NodeCache      from 'node-cache';
 import qrcode         from 'qrcode-terminal';
 import QRCode         from 'qrcode';
 import pino           from 'pino';
-import { existsSync, mkdirSync, rmSync } from 'fs';
+import path           from 'path';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import 'dotenv/config';
 
 // ── Configuration ────────────────────────────────────────────
@@ -42,6 +43,27 @@ let isConnecting = false;
 
 if (!existsSync(AUTH_DIR)) mkdirSync(AUTH_DIR, { recursive: true });
 
+function clearAuthDir() {
+  if (!existsSync(AUTH_DIR)) {
+    mkdirSync(AUTH_DIR, { recursive: true });
+    return;
+  }
+  try {
+    const files = readdirSync(AUTH_DIR);
+    for (const f of files) {
+      const full = path.join(AUTH_DIR, f);
+      try {
+        rmSync(full, { recursive: true, force: true });
+      } catch (err) {
+        console.warn('[WA] Could not remove file:', f, err.message);
+      }
+    }
+    console.log(`[WA] ✅ Purged ${files.length} credential files from ${AUTH_DIR}`);
+  } catch (err) {
+    console.error('[WA] Failed reading auth dir:', err.message);
+  }
+}
+
 // ============================================================
 // Core WhatsApp Connection
 // ============================================================
@@ -51,6 +73,7 @@ async function connectToWhatsApp() {
 
   try {
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+    console.log(`[WA] Initializing connection. Registered: ${Boolean(state.creds?.registered)}`);
 
     sock = makeWASocket({
       auth:                state,
@@ -340,15 +363,10 @@ app.all('/reset', async (req, res) => {
       sock = null;
     }
 
-    try {
-      rmSync(AUTH_DIR, { recursive: true, force: true });
-      mkdirSync(AUTH_DIR, { recursive: true });
-    } catch (fsErr) {
-      console.warn('[WA Reset] File cleanup warning:', fsErr.message);
-    }
+    clearAuthDir();
 
     isConnecting = false;
-    setTimeout(connectToWhatsApp, 1000);
+    setTimeout(connectToWhatsApp, 800);
 
     if (req.headers.accept?.includes('text/html') || req.method === 'GET') {
       return res.redirect('/qr?reset=1');
