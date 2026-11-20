@@ -23,6 +23,7 @@ import 'dotenv/config';
 const PORT        = process.env.PORT || 3001;
 const API_SECRET  = process.env.WA_API_SECRET || 'vexis-wa-2024-secret';
 const AUTH_DIR    = process.env.AUTH_DIR || './auth';
+const ADMIN_PHONE = (process.env.ADMIN_PHONE || '201001982117').replace(/\D/g, '');
 const BRAND_LINK  = 'https://vexis1.store';
 const WA_USERNAME = 'vexis1.store';
 const WA_CHAT_URL = `https://wa.me/${WA_USERNAME}`;
@@ -31,8 +32,8 @@ const WA_CHAT_URL = `https://wa.me/${WA_USERNAME}`;
 const logger = pino({ level: 'silent' });
 
 // ── Deduplication & Rate Limiting Caches ─────────────────────
-const sentCache = new NodeCache({ stdTTL: 300 });       // 5 mins duplicate protection
-const botReplyCooldown = new NodeCache({ stdTTL: 60 }); // 1 min bot reply cooldown per user
+const sentCache = new NodeCache({ stdTTL: 300 });        // 5 mins duplicate protection
+const botReplyCooldown = new NodeCache({ stdTTL: 120 }); // 2 mins reply cooldown per customer
 
 // ── Global State ─────────────────────────────────────────────
 let sock         = null;
@@ -141,17 +142,19 @@ async function connectToWhatsApp() {
 
         const senderJid = msg.key.remoteJid;
         const rawSender = senderJid.split('@')[0].replace(/\D/g, '');
-        const isAdmin   = rawSender.endsWith('1061927815');
+        const isAdmin   = rawSender.endsWith('1001982117');
 
         const rawText = (
           msg.message.conversation ||
           msg.message.extendedTextMessage?.text ||
+          msg.message.imageMessage?.caption ||
+          (msg.message.imageMessage ? '[صورة مرفقة / إيصال]' : '') ||
           ''
         ).trim();
 
         if (!rawText) continue;
 
-        // 👑 1. ADMIN SYSTEM (Dedicated for 01061927815)
+        // 👑 1. ADMIN SYSTEM (Dedicated for 01001982117)
         if (isAdmin) {
           try {
             console.log(`[WA Admin] 👑 Processing command from Admin: "${rawText}"`);
@@ -181,63 +184,42 @@ async function connectToWhatsApp() {
           continue; // Finish here, don't trigger customer bot for admin
         }
 
-        // 🤖 2. CUSTOMER BOT (For all store customers)
-        const text = rawText.toLowerCase();
+        // 🤖 2. CUSTOMER BOT (One unified reply + copy forwarded to Admin with 1-click chat link)
+        const customerPhone = rawSender;
+        const customerName  = msg.pushName || 'عميل VEXIS';
+        const chatLink      = customerPhone.startsWith('01') ? `https://wa.me/2${customerPhone}` : `https://wa.me/${customerPhone}`;
 
-        // Prevent spam replies (cooldown per customer)
-        if (botReplyCooldown.has(senderJid)) continue;
-        botReplyCooldown.set(senderJid, true);
+        // A. Reply to customer (with 2 min cooldown per customer to avoid spam)
+        if (!botReplyCooldown.has(senderJid)) {
+          botReplyCooldown.set(senderJid, true);
+          const customerReply = `أهلاً بك في *VEXIS* 🏋️❤️
 
-        // Smart keyword routing
-        let reply = '';
-
-        if (/تتبع|أوردر|اوردر|فين طلبي|order|track|شحن/.test(text)) {
-          reply = `🏋️ *خدمة تتبع شحنات VEXIS:*
-
-يمكنك معرفة خط سير شحنتك وموعد وصولها لحظة بلحظة:
-🌐 ${BRAND_LINK}/my-orders.html
-
-فقط أدخل رقم الهاتف المسجل في طلبك.
-_VEXIS — Train Hard. Look Sharp._ 🔥`;
-
-        } else if (/مقاس|مقاسات|size|وزن|طول/.test(text)) {
-          reply = `📏 *جدول مقاسات VEXIS الرسمي:*
-
-• *S:* العرض 48.5 سم | الطول 66.5 سم | الوزن 50-60 كجم
-• *M:* العرض 51 سم | الطول 68 سم | الوزن 60-70 كجم
-• *L:* العرض 53.5 سم | الطول 69.5 سم | الوزن 70-80 كجم
-• *XL:* العرض 56 سم | الطول 71 سم | الوزن 80-90 كجم
-
-💡 أقمشتنا مصممة بتقنية Dri-Fit الاستريتش، لو تفضل المقاس مريح (Regular) اختر مقاس أكبر بدرجة.
-للمساعدة الفورية ابعتلنا وزنك وطولك!`;
-
-        } else if (/استبدال|ترجيع|تبديل|ارجاع|exchange|return/.test(text)) {
-          reply = `🔄 *سياسة الاستبدال والاسترجاع من VEXIS:*
-
-نضمن لك 14 يوماً للاستبدال والاسترجاع بدون أي تعقيد.
-لتقديم طلب استبدال أو استرجاع، املأ النموذج السريع هنا:
-🌐 ${BRAND_LINK}/return.html
-
-وفريقنا هيتواصل معاك لترتيب الشحن البديل خلال 24 ساعة.`;
-
-        } else {
-          reply = `أهلاً بك في *VEXIS* 🏋️🔥
-معاك خدمة العملاء، رسالتك وصلتنا وسيقوم ممثل الخدمة بالرد عليك في أقرب وقت.
-
-📌 *أوامر سريعة للرد الآلي:*
-• اكتب *تتبع* لمتابعة حالة أوردرك
-• اكتب *مقاسات* لمعرفة جدول المقاسات
-• اكتب *استبدال* لطلب استبدال منتج
+تم استلام رسالتك بنجاح، وممثل خدمة العملاء هيتواصل معاك فوراً لمساعدتك.
 
 🌐 متجرنا الرسمي: ${BRAND_LINK}
 _Train Hard. Look Sharp._ 🔥`;
+
+          try {
+            await sock.sendMessage(senderJid, { text: customerReply });
+            console.log(`[WA Bot] 🤖 Sent confirmation reply to customer ${customerPhone}`);
+          } catch (err) {
+            console.error('[WA Bot Reply Error]', err.message);
+          }
         }
 
+        // B. Forward exact copy of the customer's message to Admin (01001982117) with 1-click chat link
         try {
-          await sock.sendMessage(senderJid, { text: reply });
-          console.log(`[WA Bot] 🤖 Replied to ${senderJid} for message: "${text.slice(0, 30)}"`);
-        } catch (botErr) {
-          console.error('[WA Bot Error]', botErr.message);
+          const adminJid = `${ADMIN_PHONE}@s.whatsapp.net`;
+          const adminCopy = `📩 *رسالة جديدة من عميل VEXIS!* 💬\n\n` +
+            `👤 *العميل:* ${customerName}\n` +
+            `📞 *رقم الهاتف:* +${customerPhone}\n` +
+            `💬 *نص الرسالة:*\n"${rawText}"\n\n` +
+            `🔗 *اضغط هنا لبدء محادثة مباشرة مع العميل:*\n${chatLink}`;
+
+          await sock.sendMessage(adminJid, { text: adminCopy });
+          console.log(`[WA Admin] 📢 Forwarded customer message from ${customerPhone} to Admin`);
+        } catch (fwdErr) {
+          console.error('[WA Admin Forward Error]', fwdErr.message);
         }
       }
     });
@@ -658,7 +640,7 @@ app.post('/send', checkSecret, async (req, res) => {
   }
 });
 
-// 5. Admin Notification Sender (Dedicated for 01061927815)
+// 5. Admin Notification Sender (Dedicated for 01001982117)
 app.post('/send-admin', checkSecret, async (req, res) => {
   if (!isConnected || !sock) return res.status(503).json({ success: false, error: 'WhatsApp not connected' });
 
@@ -666,11 +648,47 @@ app.post('/send-admin', checkSecret, async (req, res) => {
   if (!message) return res.status(400).json({ success: false, error: 'message required' });
 
   try {
-    const jid = '201061927815@s.whatsapp.net';
+    const jid = `${ADMIN_PHONE}@s.whatsapp.net`;
     await sock.sendMessage(jid, { text: message });
-    console.log('[WA] 📢 Admin alert sent to 01061927815');
-    res.json({ success: true, to: '01061927815' });
+    console.log(`[WA] 📢 Admin alert sent to ${ADMIN_PHONE}`);
+    res.json({ success: true, to: ADMIN_PHONE });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 6. Admin Order Notification with Interactive Buttons (WhatsApp Poll)
+app.post('/send-admin-order', checkSecret, async (req, res) => {
+  if (!isConnected || !sock) return res.status(503).json({ success: false, error: 'WhatsApp not connected' });
+
+  const { message, orderNumber } = req.body || {};
+  if (!message) return res.status(400).json({ success: false, error: 'message required' });
+
+  const jid = `${ADMIN_PHONE}@s.whatsapp.net`;
+  try {
+    // 1. Send detailed order receipt to admin
+    await sock.sendMessage(jid, { text: message });
+
+    // 2. Send real interactive clickable buttons (WhatsApp Poll)
+    if (orderNumber) {
+      await sock.sendMessage(jid, {
+        poll: {
+          name: `⚡ إجراء سريع للأوردر #${orderNumber}:`,
+          values: [
+            `قبول ${orderNumber}`,
+            `شحن ${orderNumber}`,
+            `تسليم ${orderNumber}`,
+            `رفض ${orderNumber}`
+          ],
+          selectableCount: 1
+        }
+      });
+      console.log(`[WA] 🔘 Sent interactive buttons poll for #${orderNumber} to admin`);
+    }
+
+    res.json({ success: true, to: ADMIN_PHONE, orderNumber });
+  } catch (err) {
+    console.error('[WA Send Admin Order Error]', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
