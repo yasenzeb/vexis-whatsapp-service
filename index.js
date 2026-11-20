@@ -8,7 +8,6 @@ import {
   makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
-  makeInMemoryStore,
   Browsers
 } from '@whiskeysockets/baileys';
 import { Boom }       from '@hapi/boom';
