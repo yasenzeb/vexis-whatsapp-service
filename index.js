@@ -132,7 +132,7 @@ async function connectToWhatsApp() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    // ── Smart Interactive Bot (Auto-Reply) ───────────────────
+    // ── Smart Interactive Bot & Admin System ─────────────────
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       if (type !== 'notify') return;
       for (const msg of messages) {
@@ -140,13 +140,49 @@ async function connectToWhatsApp() {
         if (!msg.message || msg.key.fromMe || msg.key.remoteJid.includes('@broadcast')) continue;
 
         const senderJid = msg.key.remoteJid;
-        const text = (
+        const rawSender = senderJid.split('@')[0].replace(/\D/g, '');
+        const isAdmin   = rawSender.endsWith('1061927815');
+
+        const rawText = (
           msg.message.conversation ||
           msg.message.extendedTextMessage?.text ||
           ''
-        ).trim().toLowerCase();
+        ).trim();
 
-        if (!text) continue;
+        if (!rawText) continue;
+
+        // 👑 1. ADMIN SYSTEM (Dedicated for 01061927815)
+        if (isAdmin) {
+          try {
+            console.log(`[WA Admin] 👑 Processing command from Admin: "${rawText}"`);
+            const adminRes = await fetch('https://vexis1.store/api/whatsapp-admin', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-api-secret': API_SECRET,
+              },
+              body: JSON.stringify({
+                from: rawSender,
+                message: rawText,
+              }),
+              signal: AbortSignal.timeout(12000),
+            });
+            const adminData = await adminRes.json();
+            if (adminData?.reply) {
+              await sock.sendMessage(senderJid, { text: adminData.reply });
+              console.log(`[WA Admin] ✅ Replied to admin with results`);
+            }
+          } catch (admErr) {
+            console.error('[WA Admin Webhook Error]', admErr.message);
+            await sock.sendMessage(senderJid, {
+              text: `⚠️ حدث خطأ أثناء الاتصال بنظام الإدارة: ${admErr.message}`
+            });
+          }
+          continue; // Finish here, don't trigger customer bot for admin
+        }
+
+        // 🤖 2. CUSTOMER BOT (For all store customers)
+        const text = rawText.toLowerCase();
 
         // Prevent spam replies (cooldown per customer)
         if (botReplyCooldown.has(senderJid)) continue;
@@ -617,6 +653,23 @@ app.post('/send', checkSecret, async (req, res) => {
     const jid = formatJid(phone);
     await sock.sendMessage(jid, { text: message });
     res.json({ success: true, to: phone });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 5. Admin Notification Sender (Dedicated for 01061927815)
+app.post('/send-admin', checkSecret, async (req, res) => {
+  if (!isConnected || !sock) return res.status(503).json({ success: false, error: 'WhatsApp not connected' });
+
+  const { message } = req.body || {};
+  if (!message) return res.status(400).json({ success: false, error: 'message required' });
+
+  try {
+    const jid = '201061927815@s.whatsapp.net';
+    await sock.sendMessage(jid, { text: message });
+    console.log('[WA] 📢 Admin alert sent to 01061927815');
+    res.json({ success: true, to: '01061927815' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
