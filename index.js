@@ -1,6 +1,5 @@
 // ============================================================
 // VEXIS WhatsApp Notification Service
-// Uses @whiskeysockets/baileys — no browser needed
 // ============================================================
 
 import express        from 'express';
@@ -13,28 +12,27 @@ import {
 import { Boom }       from '@hapi/boom';
 import NodeCache      from 'node-cache';
 import qrcode         from 'qrcode-terminal';
+import QRCode         from 'qrcode';
 import pino           from 'pino';
-import { readFileSync, existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync } from 'fs';
 import 'dotenv/config';
 
-// ── Config ──────────────────────────────────────────────────
+// ── Config ───────────────────────────────────────────────────
 const PORT       = process.env.PORT || 3001;
 const API_SECRET = process.env.WA_API_SECRET || 'vexis-secret-key';
 const AUTH_DIR   = process.env.AUTH_DIR || './auth';
-const OWNER_JID  = (process.env.OWNER_PHONE || '201061927815') + '@s.whatsapp.net';
 
 // ── Logger ───────────────────────────────────────────────────
-const logger = pino({ level: 'silent' }); // هادئ — مش هيطفش الـ terminal
+const logger = pino({ level: 'silent' });
 
-// ── Cache لمنع إرسال مكرر ───────────────────────────────────
-const sentCache = new NodeCache({ stdTTL: 300 }); // 5 دقايق
+// ── Cache لمنع إرسال مكرر ────────────────────────────────────
+const sentCache = new NodeCache({ stdTTL: 300 });
 
-// ── Global socket ────────────────────────────────────────────
-let sock = null;
+// ── Global state ─────────────────────────────────────────────
+let sock        = null;
 let isConnected = false;
-let qrPrinted = false;
+let latestQR    = null;   // raw QR string — لعمل صورة منه
 
-// ── Auth dir ─────────────────────────────────────────────────
 if (!existsSync(AUTH_DIR)) mkdirSync(AUTH_DIR, { recursive: true });
 
 // ============================================================
@@ -44,32 +42,28 @@ async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
   sock = makeWASocket({
-    auth:            state,
+    auth:               state,
     logger,
-    browser:         Browsers.ubuntu('Chrome'),
-    printQRInTerminal: false,
-    connectTimeoutMs: 60_000,
+    browser:            Browsers.ubuntu('Chrome'),
+    printQRInTerminal:  false,
+    connectTimeoutMs:   60_000,
     keepAliveIntervalMs: 25_000,
     retryRequestDelayMs: 2000,
   });
 
-  // ── QR Code ──────────────────────────────────────────────
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr && !qrPrinted) {
-      console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      console.log('📱 VEXIS WhatsApp Service — امسح الـ QR Code');
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    if (qr) {
+      latestQR = qr;
+      // طباعة ASCII في الـ logs للمراقبة
+      console.log('\n[WA] New QR Code generated — open /qr in browser to scan\n');
       qrcode.generate(qr, { small: true });
-      console.log('\nافتح WhatsApp → More Options → Linked Devices → Link a Device');
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-      qrPrinted = true;
     }
 
     if (connection === 'close') {
       isConnected = false;
-      qrPrinted   = false;
+      latestQR    = null;
       const shouldReconnect =
         (lastDisconnect?.error instanceof Boom)
           ? lastDisconnect.error.output?.statusCode !== DisconnectReason.loggedOut
@@ -85,10 +79,9 @@ async function connectToWhatsApp() {
 
     if (connection === 'open') {
       isConnected = true;
-      qrPrinted   = false;
+      latestQR    = null;
       console.log('\n✅ WhatsApp connected successfully!');
-      console.log(`📞 Connected as: ${sock.user?.id}`);
-      console.log(`🌐 Service running on port ${PORT}\n`);
+      console.log(`📞 Connected as: ${sock.user?.id}\n`);
     }
   });
 
@@ -96,7 +89,7 @@ async function connectToWhatsApp() {
 }
 
 // ============================================================
-// Message Builder — فاتورة VEXIS احترافية
+// Message Builder
 // ============================================================
 function buildOrderMessage(order) {
   const {
@@ -122,7 +115,6 @@ function buildOrderMessage(order) {
     timeZone: 'Africa/Cairo'
   });
 
-  // بناء قائمة المنتجات
   const itemsText = items.map(i => {
     const size  = i.size  ? ` [${i.size}]`  : '';
     const color = i.color ? ` (${i.color})` : '';
@@ -130,11 +122,8 @@ function buildOrderMessage(order) {
     return `  • ${i.name}${size}${color} ×${i.qty || 1} — *EGP ${price}*`;
   }).join('\n');
 
-  const discountLine = discount > 0
-    ? `\n🏷️ *الخصم:* -EGP ${discount}` : '';
-
-  const notesLine = notes
-    ? `\n📝 *ملاحظات:* ${notes}` : '';
+  const discountLine = discount > 0 ? `\n🏷️ *الخصم:* -EGP ${discount}` : '';
+  const notesLine    = notes        ? `\n📝 *ملاحظات:* ${notes}`        : '';
 
   return `أزيك يا *${customerName}* 👋❤️
 
@@ -181,7 +170,6 @@ _VEXIS — Train Hard. Look Sharp._ 🔥`.trim();
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
-// ── Middleware: Auth ─────────────────────────────────────────
 function checkSecret(req, res, next) {
   const secret = req.headers['x-api-secret'] || req.query.secret;
   if (secret !== API_SECRET) {
@@ -190,72 +178,124 @@ function checkSecret(req, res, next) {
   next();
 }
 
-// ── Health Check ─────────────────────────────────────────────
+// ── Health ───────────────────────────────────────────────────
 app.get('/health', (req, res) => {
-  res.json({
-    success: true,
-    connected: isConnected,
-    timestamp: new Date().toISOString()
-  });
+  res.json({ success: true, connected: isConnected, hasQR: !!latestQR, timestamp: new Date().toISOString() });
+});
+
+// ── QR Code Page (بدون auth — لأن محتاجها تفتحها في المتصفح) ──
+app.get('/qr', async (req, res) => {
+  if (isConnected) {
+    return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>VEXIS WhatsApp</title>
+    <style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#000;color:#fff;flex-direction:column;gap:16px}</style>
+    </head><body>
+    <h1>✅ WhatsApp Connected!</h1>
+    <p>الواتساب متصل بنجاح — مش محتاج تعمل scan</p>
+    <p style="color:#aaa;font-size:12px">Connected as: ${sock?.user?.id || 'unknown'}</p>
+    </body></html>`);
+  }
+
+  if (!latestQR) {
+    return res.send(`<!DOCTYPE html><html><head><meta charset="utf-8">
+    <meta http-equiv="refresh" content="5">
+    <title>VEXIS WhatsApp — Waiting for QR</title>
+    <style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#000;color:#fff;flex-direction:column;gap:16px}</style>
+    </head><body>
+    <h2>⏳ جاري الاتصال بـ WhatsApp...</h2>
+    <p>الصفحة هتتحدث أوتوماتيك كل 5 ثواني</p>
+    <p style="color:#aaa;font-size:12px">الصفحة بتتحدث... انتظر</p>
+    </body></html>`);
+  }
+
+  try {
+    const qrDataUrl = await QRCode.toDataURL(latestQR, {
+      width:  400,
+      margin: 2,
+      color:  { dark: '#000000', light: '#ffffff' }
+    });
+
+    res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="30">
+  <title>VEXIS WhatsApp — Scan QR</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, sans-serif;
+      background: #0a0a0a;
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 20px;
+      padding: 40px 32px;
+      text-align: center;
+      max-width: 420px;
+      width: 100%;
+    }
+    .logo { font-size: 28px; font-weight: 900; letter-spacing: 4px; margin-bottom: 8px; }
+    .sub  { color: #666; font-size: 13px; margin-bottom: 28px; }
+    .qr-box {
+      background: #fff;
+      border-radius: 16px;
+      padding: 16px;
+      display: inline-block;
+      margin-bottom: 24px;
+    }
+    .qr-box img { width: 300px; height: 300px; display: block; }
+    h2 { font-size: 18px; margin-bottom: 12px; }
+    ol { text-align: left; color: #bbb; font-size: 14px; line-height: 2; padding-left: 20px; }
+    ol li strong { color: #fff; }
+    .refresh { color: #555; font-size: 12px; margin-top: 20px; }
+    .timer { color: #22c55e; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">VEXIS</div>
+    <div class="sub">WhatsApp Business Service</div>
+
+    <div class="qr-box">
+      <img src="${qrDataUrl}" alt="WhatsApp QR Code">
+    </div>
+
+    <h2>امسح الـ QR Code</h2>
+    <ol>
+      <li>افتح <strong>واتساب</strong> على موبايلك</li>
+      <li>اضغط النقط الثلاث <strong>⋮</strong></li>
+      <li>اختر <strong>Linked Devices</strong></li>
+      <li>اضغط <strong>Link a Device</strong></li>
+      <li>امسح الكود فوق ✅</li>
+    </ol>
+
+    <p class="refresh">⏱️ الصفحة بتتحدث كل 30 ثانية | الكود صالح لدقيقتين</p>
+  </div>
+</body>
+</html>`);
+  } catch (err) {
+    res.status(500).send('Error generating QR: ' + err.message);
+  }
 });
 
 // ── Status ───────────────────────────────────────────────────
 app.get('/status', checkSecret, (req, res) => {
-  res.json({
-    success: true,
-    connected: isConnected,
-    user: sock?.user?.id || null,
-    timestamp: new Date().toISOString()
-  });
+  res.json({ success: true, connected: isConnected, user: sock?.user?.id || null });
 });
 
-// ── Send Message ─────────────────────────────────────────────
-app.post('/send', checkSecret, async (req, res) => {
-  if (!isConnected || !sock) {
-    return res.status(503).json({
-      success: false,
-      error: 'WhatsApp not connected yet. Scan QR code first.'
-    });
-  }
-
-  const { phone, message, order } = req.body || {};
-
-  if (!phone) {
-    return res.status(400).json({ success: false, error: 'phone is required' });
-  }
-
-  // بناء الرسالة — إما مباشرة أو من بيانات الأوردر
-  const text = message || (order ? buildOrderMessage(order) : null);
-  if (!text) {
-    return res.status(400).json({ success: false, error: 'message or order object required' });
-  }
-
-  // تنظيف رقم الهاتف
-  const cleanPhone = phone.toString().replace(/\D/g, '');
-  const jid = (cleanPhone.startsWith('2') ? cleanPhone : '2' + cleanPhone) + '@s.whatsapp.net';
-
-  // منع الإرسال المكرر
-  const cacheKey = `${jid}:${order?.orderNumber || text.slice(0, 30)}`;
-  if (sentCache.has(cacheKey)) {
-    return res.json({ success: true, duplicate: true, message: 'Already sent recently' });
-  }
-
-  try {
-    await sock.sendMessage(jid, { text });
-    sentCache.set(cacheKey, true);
-
-    console.log(`[WA] ✅ Message sent to ${phone} (${order?.orderNumber || 'manual'})`);
-    res.json({ success: true, to: phone, orderNumber: order?.orderNumber });
-  } catch (err) {
-    console.error(`[WA] ❌ Failed to send to ${phone}:`, err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ── Send Order (shortcut endpoint) ───────────────────────────
+// ── Send Order (main endpoint) ────────────────────────────────
 app.post('/send-order', checkSecret, async (req, res) => {
   if (!isConnected || !sock) {
-    return res.status(503).json({ success: false, error: 'WhatsApp not connected' });
+    return res.status(503).json({ success: false, error: 'WhatsApp not connected. Open /qr to scan.' });
   }
 
   const order = req.body;
@@ -263,19 +303,19 @@ app.post('/send-order', checkSecret, async (req, res) => {
     return res.status(400).json({ success: false, error: 'phone and orderNumber required' });
   }
 
-  const text       = buildOrderMessage(order);
-  const cleanPhone = order.phone.toString().replace(/\D/g, '');
-  const jid        = (cleanPhone.startsWith('2') ? cleanPhone : '2' + cleanPhone) + '@s.whatsapp.net';
-
   const cacheKey = `order:${order.orderNumber}`;
   if (sentCache.has(cacheKey)) {
     return res.json({ success: true, duplicate: true });
   }
 
+  const cleanPhone = order.phone.toString().replace(/\D/g, '');
+  const jid        = (cleanPhone.startsWith('2') ? cleanPhone : '2' + cleanPhone) + '@s.whatsapp.net';
+  const text       = buildOrderMessage(order);
+
   try {
     await sock.sendMessage(jid, { text });
     sentCache.set(cacheKey, true);
-    console.log(`[WA] ✅ Order receipt sent → ${order.phone} | ${order.orderNumber}`);
+    console.log(`[WA] ✅ Receipt sent → ${order.phone} | ${order.orderNumber}`);
     res.json({ success: true, to: order.phone, orderNumber: order.orderNumber });
   } catch (err) {
     console.error(`[WA] ❌ Error:`, err.message);
@@ -283,15 +323,40 @@ app.post('/send-order', checkSecret, async (req, res) => {
   }
 });
 
-// ── 404 ──────────────────────────────────────────────────────
+// ── Send (generic) ────────────────────────────────────────────
+app.post('/send', checkSecret, async (req, res) => {
+  if (!isConnected || !sock) {
+    return res.status(503).json({ success: false, error: 'WhatsApp not connected' });
+  }
+
+  const { phone, message, order } = req.body || {};
+  if (!phone) return res.status(400).json({ success: false, error: 'phone required' });
+
+  const text = message || (order ? buildOrderMessage(order) : null);
+  if (!text) return res.status(400).json({ success: false, error: 'message or order required' });
+
+  const cleanPhone = phone.toString().replace(/\D/g, '');
+  const jid        = (cleanPhone.startsWith('2') ? cleanPhone : '2' + cleanPhone) + '@s.whatsapp.net';
+
+  const cacheKey = `${jid}:${text.slice(0, 30)}`;
+  if (sentCache.has(cacheKey)) return res.json({ success: true, duplicate: true });
+
+  try {
+    await sock.sendMessage(jid, { text });
+    sentCache.set(cacheKey, true);
+    res.json({ success: true, to: phone });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.use((req, res) => res.status(404).json({ success: false, error: 'Not found' }));
 
-// ── Start ────────────────────────────────────────────────────
+// ── Start ─────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log('\n🚀 VEXIS WhatsApp Service starting...');
   console.log(`📡 HTTP server listening on port ${PORT}`);
-  console.log(`🔑 API Secret: ${API_SECRET.slice(0, 4)}****`);
-  console.log('🔗 Connecting to WhatsApp...\n');
+  console.log(`🔗 Open /qr in browser to scan QR Code\n`);
 });
 
 connectToWhatsApp();
