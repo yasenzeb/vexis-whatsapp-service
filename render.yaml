@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: vexis-whatsapp-service
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    region: frankfurt
+    plan: starter          # $7/شهر — أرخص paid plan عشان Session يتحفظ
+    disk:
+      name: wa-auth
+      mountPath: /app/auth
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: 3001
+      - key: WA_API_SECRET
+        sync: false        # هتحطه يدوي في Render dashboard
+      - key: OWNER_PHONE
+        value: 201061927815
+      - key: AUTH_DIR
+        value: /app/auth
+    healthCheckPath: /health
+    autoDeploy: false      # مش هيعمل deploy كل push
