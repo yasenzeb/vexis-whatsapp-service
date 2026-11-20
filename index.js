@@ -98,22 +98,34 @@ async function connectToWhatsApp() {
       if (connection === 'close') {
         isConnected  = false;
         connectedJid = null;
-        latestQR     = null;
         isConnecting = false;
+        // ⚠️ DO NOT clear latestQR here — keep it alive so user can scan
 
         const statusCode = (lastDisconnect?.error instanceof Boom)
           ? lastDisconnect.error.output?.statusCode
           : null;
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-        console.log(`[WA] Connection closed. StatusCode: ${statusCode}. Reconnecting: ${shouldReconnect}`);
+        // Check if we had a real registered session before this disconnect
+        const wasRegistered = Boolean(state?.creds?.registered);
+        const isLoggedOut   = statusCode === DisconnectReason.loggedOut; // 401
 
-        if (shouldReconnect) {
-          setTimeout(connectToWhatsApp, 3000);
-        } else {
-          console.log('[WA] Logged out. Session cleaned up. Waiting for new scan.');
-          try { rmSync(AUTH_DIR, { recursive: true, force: true }); } catch {}
+        console.log(`[WA] Connection closed. StatusCode: ${statusCode}. WasRegistered: ${wasRegistered}`);
+
+        if (isLoggedOut && wasRegistered) {
+          // Phone explicitly removed this device → clear session, generate fresh QR
+          console.log('[WA] 🚪 Phone logged out this device. Clearing session for fresh QR scan.');
+          clearAuthDir();
+          latestQR = null;
           setTimeout(connectToWhatsApp, 2000);
+        } else if (isLoggedOut && !wasRegistered) {
+          // 401 on a fresh start = no credentials yet, NOT a real logout
+          // Just reconnect; baileys will emit a new QR automatically
+          console.log('[WA] 🔄 Fresh start (no session). Reconnecting to generate QR...');
+          setTimeout(connectToWhatsApp, 5000);
+        } else {
+          // Network / timeout disconnect — reconnect normally
+          console.log(`[WA] 📡 Network disconnect (code ${statusCode}). Reconnecting in 4s...`);
+          setTimeout(connectToWhatsApp, 4000);
         }
       }
 
