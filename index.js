@@ -89,79 +89,55 @@ async function connectToWhatsApp() {
 }
 
 // ============================================================
-// Message Builder
+// Message Builder — فاتورة VEXIS احترافية ومختصرة
 // ============================================================
 function buildOrderMessage(order) {
   const {
     customerName,
     orderNumber,
     items = [],
-    subtotal = 0,
     shipping = 0,
     discount = 0,
     total    = 0,
     address,
     governorate,
-    notes,
   } = order;
 
-  const now     = new Date();
-  const dateStr = now.toLocaleDateString('ar-EG', {
-    year: 'numeric', month: 'long', day: 'numeric',
-    timeZone: 'Africa/Cairo'
-  });
-  const timeStr = now.toLocaleTimeString('ar-EG', {
-    hour: '2-digit', minute: '2-digit',
-    timeZone: 'Africa/Cairo'
-  });
-
-  const itemsText = items.map(i => {
-    const size  = i.size  ? ` [${i.size}]`  : '';
-    const color = i.color ? ` (${i.color})` : '';
-    const price = (i.finalPrice || i.price || 0) * (i.qty || 1);
-    return `  • ${i.name}${size}${color} ×${i.qty || 1} — *EGP ${price}*`;
+  const itemsList = items.map(i => {
+    const size = i.size ? ` [${i.size}]` : '';
+    const qty  = i.qty > 1 ? ` ×${i.qty}` : '';
+    const itemTotal = (i.finalPrice || i.price || 0) * (i.qty || 1);
+    return `• *${i.name}*${size}${qty} — EGP ${itemTotal}`;
   }).join('\n');
 
-  const discountLine = discount > 0 ? `\n🏷️ *الخصم:* -EGP ${discount}` : '';
-  const notesLine    = notes        ? `\n📝 *ملاحظات:* ${notes}`        : '';
+  const discountText = discount > 0 ? `\n🏷️ *الخصم:* -EGP ${discount}` : '';
 
-  return `أزيك يا *${customerName}* 👋❤️
+  return `أهلاً بك يا *${customerName}* 👋
 
-استلمنا أوردرك وبنجهزه دلوقتي! 🏋️
+تم استلام طلبك بنجاح في *VEXIS* 🏋️
+طلبك قيد التجهيز الآن للشحن السريع 🚀
 
 ━━━━━━━━━━━━━━━━━━━
-🧾 *فاتورة الطلب*
+🧾 *تفاصيل الأوردر*
 ━━━━━━━━━━━━━━━━━━━
-
 🆔 *رقم الطلب:* \`${orderNumber}\`
-📅 *التاريخ:* ${dateStr} — ${timeStr}
 
-━━━━━━━━━━━━━━━━━━━
 📦 *المنتجات:*
-${itemsText}
+${itemsList}
+${discountText}
+🚚 *الشحن:* EGP ${shipping}
+💵 *المطلوب عند الاستلام:* *EGP ${total}*
 
-━━━━━━━━━━━━━━━━━━━
-💰 *المجموع الفرعي:* EGP ${subtotal}${discountLine}
-🚚 *رسوم الشحن:* EGP ${shipping}
-✅ *الإجمالي المطلوب دفعه:* *EGP ${total}*
-
-━━━━━━━━━━━━━━━━━━━
 📍 *عنوان التوصيل:*
-${address}، ${governorate}${notesLine}
-
-💳 *طريقة الدفع:* الدفع عند الاستلام (COD)
+${address}، ${governorate}
 ━━━━━━━━━━━━━━━━━━━
 
-معاك خدمة عملاء *VEXIS* 🏋️
+لو عندك أي استفسار بخصوص المقاسات أو الشحن أو الاستبدال، تقدر تتواصل مع خدمة العملاء مباشرة من هنا:
+💬 https://wa.me/_youssef.ahmed11
+(@_youssef.ahmed11)
 
-طلبك تحت نظرنا وهيوصلك في أقرب وقت ❤️
-أي استفسار عن الأوردر، المقاسات، الشحن، أو الاستبدال — إحنا هنا!
-
-📲 *واتساب:* 01061927815
-🕒 *مواعيد الرد:* 10 صباحًا – 12 منتصف الليل
-
-شكرًا لثقتك في *VEXIS* ❤️
-_VEXIS — Train Hard. Look Sharp._ 🔥`.trim();
+شكراً لاختيارك *VEXIS* ❤️
+_Train Hard. Look Sharp._ 🔥`.trim();
 }
 
 // ============================================================
